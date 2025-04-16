@@ -896,6 +896,71 @@ class LeafletMapVisualizer:
                 math.sin(lng / 30.0 * 3.141592653589793)) * 2.0 / 3.0
         return ret
     
+    def _detect_nearby_points(self, data: pd.DataFrame, distance_threshold: float = 3.0, velocity_threshold: float = 0.5) -> pd.DataFrame:
+        """
+        Detect points that are too close to each other and mark them for filtering.
+        For points within the threshold distance, keep only the one with the highest velocity magnitude.
+        Points with velocity below the threshold are considered static and not rendered.
+        Skip distance comparison with the last three points to avoid filtering consecutive points.
+        
+        Parameters:
+        - data: DataFrame containing GPS data with columns: latitude, longitude, velocity_magnitude
+        - distance_threshold: Maximum distance in meters to consider points as "nearby"
+        - velocity_threshold: Minimum velocity in m/s to consider a point valid
+        
+        Returns:
+        - DataFrame with an additional 'should_render' column indicating whether to render the point
+        """
+        self.logger.info("Detecting nearby points")
+        
+        # Add a column to track whether to render each point
+        data['should_render'] = True
+        
+        # Convert distance threshold from meters to degrees (approximate)
+        # 1 degree ≈ 111,320 meters at the equator
+        threshold_degrees = distance_threshold / 111320.0
+        
+        # Create a list to store visited points
+        visited_points = []
+        
+        for i in range(len(data)):
+            current_point = data.iloc[i]
+            current_lat = current_point['latitude']
+            current_lon = current_point['longitude']
+            current_vel = current_point['velocity_magnitude']
+            
+            # Skip points with velocity below threshold
+            if current_vel < velocity_threshold:
+                # self.logger.info(f"data {str(i)} has been filtered due to low velocity {current_vel}")
+                data.at[i, 'should_render'] = False
+                continue
+            
+            # Check against previously visited points, skipping the last three
+            for j, (visited_lat, visited_lon, visited_vel, visited_idx) in enumerate(visited_points[:-5]):
+                # Calculate distance using simple Euclidean distance (approximate for small distances)
+                lat_diff = current_lat - visited_lat
+                lon_diff = current_lon - visited_lon
+                distance = math.sqrt(lat_diff**2 + lon_diff**2)
+                
+                if distance < threshold_degrees:
+                    # Points are too close, keep the one with higher velocity
+                    if current_vel > visited_vel:
+                        # Current point has higher velocity, mark the previous one to not render
+                        data.at[visited_idx, 'should_render'] = False
+                        # Update the visited point with current point's data
+                        visited_points[j] = (current_lat, current_lon, current_vel, i)
+                    else:
+                        # Previous point has higher velocity, mark current point to not render
+                        data.at[i, 'should_render'] = False
+                    break
+            else:
+                # No nearby points found, add current point to visited points
+                visited_points.append((current_lat, current_lon, current_vel, i))
+        
+        static_points = len(data) - data['should_render'].sum()
+        self.logger.info(f"Filtered {static_points} points due to low velocity or proximity")
+        return data
+
     def _generate_gaode_map_data(self, data: pd.DataFrame, output_dir: str) -> Tuple[str, dict]:
         """
         Generate GeoJSON data for Gaode Maps visualization and save to file
@@ -911,12 +976,19 @@ class LeafletMapVisualizer:
         """
         self.logger.info("Generating Gaode Maps data")
         
+        # Detect and filter nearby points
+        data = self._detect_nearby_points(data)
+        
         # Calculate map bounds and zoom settings
         map_settings = self.calculate_map_bounds(data)
         
         # Convert data to GeoJSON format
         features = []
         for _, row in data.iterrows():
+            # Skip points marked as not to render
+            if not row['should_render']:
+                continue
+                
             # Transform coordinates for Gaode Maps
             lng, lat = self._transform_coordinates(row['longitude'], row['latitude'])
             
@@ -972,6 +1044,9 @@ class LeafletMapVisualizer:
         """
         self.logger.info("Generating Gaode Maps line data")
         
+        # Detect and filter nearby points
+        data = self._detect_nearby_points(data)
+        
         # Calculate map bounds and zoom settings
         map_settings = self.calculate_map_bounds(data)
         
@@ -982,6 +1057,10 @@ class LeafletMapVisualizer:
         for i in range(len(data) - 1):
             current_row = data.iloc[i]
             next_row = data.iloc[i + 1]
+            
+            # Skip points marked as not to render
+            if not current_row['should_render']:
+                continue
             
             # Transform coordinates for Gaode Maps
             current_lng, current_lat = self._transform_coordinates(
@@ -1017,7 +1096,7 @@ class LeafletMapVisualizer:
             
             # Create line feature if time gap is less than 60 seconds
             time_diff = next_row['epoch_seconds'] - current_row['epoch_seconds']
-            if time_diff < 60:
+            if time_diff < 60 and next_row['should_render']:
                 line_feature = {
                     'type': 'Feature',
                     'geometry': {
@@ -1035,28 +1114,29 @@ class LeafletMapVisualizer:
                 }
                 line_features.append(line_feature)
         
-        # Add last point
+        # Add last point if it should be rendered
         last_row = data.iloc[-1]
-        last_lng, last_lat = self._transform_coordinates(
-            last_row['longitude'], 
-            last_row['latitude']
-        )
-        last_color = self._get_gradient_color(last_row['percentage_score'])
-        last_timestamp_str = last_row['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
-        last_point_feature = {
-            'type': 'Feature',
-            'geometry': {
-                'type': 'Point',
-                'coordinates': [last_lng, last_lat]
-            },
-            'properties': {
-                'severity_score': last_row['severity_score'],
-                'percentage_score': last_row['percentage_score'],
-                'timestamp': last_timestamp_str,
-                'color': last_color
+        if last_row['should_render']:
+            last_lng, last_lat = self._transform_coordinates(
+                last_row['longitude'], 
+                last_row['latitude']
+            )
+            last_color = self._get_gradient_color(last_row['percentage_score'])
+            last_timestamp_str = last_row['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
+            last_point_feature = {
+                'type': 'Feature',
+                'geometry': {
+                    'type': 'Point',
+                    'coordinates': [last_lng, last_lat]
+                },
+                'properties': {
+                    'severity_score': last_row['severity_score'],
+                    'percentage_score': last_row['percentage_score'],
+                    'timestamp': last_timestamp_str,
+                    'color': last_color
+                }
             }
-        }
-        point_features.append(last_point_feature)
+            point_features.append(last_point_feature)
         
         # Create GeoJSON collections
         points_geojson = {
