@@ -25,18 +25,6 @@
             margin-right: 8px;
             opacity: 0.7;
         }
-        .leaflet-control-button {
-            background-color: white;
-            border: 2px solid rgba(0,0,0,0.2);
-            border-radius: 4px;
-            padding: 5px 10px;
-            cursor: pointer;
-            font-size: 14px;
-            margin: 5px;
-        }
-        .leaflet-control-button:hover {
-            background-color: #f4f4f4;
-        }
     </style>
 </head>
 <body>
@@ -58,83 +46,28 @@
         map.fitBounds(bounds);
         
         // Load GeoJSON data
-        Promise.all([
-            fetch('vibration_severity_line_map_gaode_points.json').then(response => response.json()),
-            fetch('vibration_severity_line_map_gaode_lines.json').then(response => response.json())
-        ])
-        .then(([pointsData, linesData]) => {
-            // Create points layer
-            var pointsLayer = L.geoJSON(pointsData, {
-                pointToLayer: function(feature, latlng) {
-                    return L.circleMarker(latlng, {
-                        radius: 6,
-                        fillColor: feature.properties.color,
-                        color: '#000',
-                        weight: 1,
-                        opacity: 0.1,
-                        fillOpacity: 0.8
-                    });
-                },
-                onEachFeature: function(feature, layer) {
-                    if (feature.properties) {
-                        var popupContent = '<b>Severity Score:</b> ' + feature.properties.severity_score.toFixed(2) + '<br>' +
-                                         '<b>Percentage:</b> ' + feature.properties.percentage_score.toFixed(1) + '%<br>' +
-                                         '<b>Time:</b> ' + feature.properties.timestamp;
-                        layer.bindPopup(popupContent);
-                    }
-                }
-            });
-            
-            // Create lines layer
-            var linesLayer = L.geoJSON(linesData, {
-                style: function(feature) {
-                    return {
-                        color: feature.properties.color,
-                        weight: 7,
-                        opacity: 1
-                    };
-                },
-                onEachFeature: function(feature, layer) {
-                    if (feature.properties) {
-                        var popupContent = '<b>Average Severity Score:</b> ' + feature.properties.severity_score.toFixed(2) + '<br>' +
-                                         '<b>Average Percentage:</b> ' + feature.properties.percentage_score.toFixed(1) + '%';
-                        layer.bindPopup(popupContent);
-                    }
-                }
-            });
-            
-            // Add layers to map
-            linesLayer.addTo(map);
-            pointsLayer.addTo(map);
-            
-            // Add toggle button
-            var toggleButton = L.Control.extend({
-                options: {
-                    position: 'topleft'
-                },
-                onAdd: function(map) {
-                    var container = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
-                    var button = L.DomUtil.create('a', 'leaflet-control-button', container);
-                    button.innerHTML = 'Toggle Points';
-                    button.href = '#';
-                    button.title = 'Toggle Points';
-                    
-                    L.DomEvent.on(button, 'click', function(e) {
-                        L.DomEvent.stopPropagation(e);
-                        L.DomEvent.preventDefault(e);
-                        if (map.hasLayer(pointsLayer)) {
-                            map.removeLayer(pointsLayer);
-                        } else {
-                            map.addLayer(pointsLayer);
+        fetch('vibration_severity_line_map_gaode_lines.json')
+            .then(response => response.json())
+            .then(linesData => {
+                // Create lines layer
+                var linesLayer = L.geoJSON(linesData, {
+                    style: function(feature) {
+                        return {
+                            color: feature.properties.color,
+                            weight: 7,
+                            opacity: 1
+                        };
+                    },
+                    onEachFeature: function(feature, layer) {
+                        if (feature.properties) {
+                            var popupContent = '<b>Average Severity Score:</b> ' + feature.properties.severity_score.toFixed(2) + '<br>' +
+                                             '<b>Average Percentage:</b> ' + feature.properties.percentage_score.toFixed(1) + '%';
+                            layer.bindPopup(popupContent);
                         }
-                    });
-                    
-                    return container;
-                }
-            });
-            map.addControl(new toggleButton());
-        })
-        .catch(error => console.error('Error loading data:', error));
+                    }
+                }).addTo(map);
+            })
+            .catch(error => console.error('Error loading data:', error));
         
         // Add legend
         var legend = L.control({position: 'bottomright'});

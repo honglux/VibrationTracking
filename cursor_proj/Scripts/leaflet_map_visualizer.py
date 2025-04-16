@@ -7,6 +7,7 @@ import sqlite3
 from database_manager import DatabaseManager
 import math
 from robust_max_calculator import RobustMaxCalculator
+from typing import Tuple, Optional
 
 class LeafletMapVisualizer:
     """
@@ -895,53 +896,48 @@ class LeafletMapVisualizer:
                 math.sin(lng / 30.0 * 3.141592653589793)) * 2.0 / 3.0
         return ret
     
-    def create_gaode_map(self, data: pd.DataFrame, output_dir: str = None) -> None:
+    def _generate_gaode_map_data(self, data: pd.DataFrame, output_dir: str) -> Tuple[str, dict]:
         """
-        Create an interactive map visualization using Gaode Maps (高德地图)
+        Generate GeoJSON data for Gaode Maps visualization and save to file
         
         Parameters:
-        - data: DataFrame containing combined GPS and severity data
-        - output_dir: Directory to save the output (if None, uses Results directory)
+        - data: DataFrame containing GPS and severity data
+        - output_dir: Directory to save the data file
+        
+        Returns:
+        - Tuple containing:
+          - str: Path to the data file
+          - dict: Map settings (center, zoom, bounds)
         """
-        if output_dir is None:
-            output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Results")
-            if not os.path.exists(output_dir):
-                os.makedirs(output_dir)
+        self.logger.info("Generating Gaode Maps data")
         
-        self.logger.info("Creating Gaode Maps visualization")
-        
-        # Calculate map bounds and zoom
-        self.logger.info("Calculating map bounds...")
+        # Calculate map bounds and zoom settings
         map_settings = self.calculate_map_bounds(data)
-        self.logger.info(f"Map settings calculated: zoom={map_settings['zoom']}, center={map_settings['center']}")
         
         # Convert data to GeoJSON format
-        self.logger.info("Converting data to GeoJSON format...")
         features = []
-        
         for _, row in data.iterrows():
-            # Transform coordinates from WGS-84 to GCJ-02
-            gcj_lng, gcj_lat = self._transform_coordinates(row['longitude'], row['latitude'])
+            # Transform coordinates for Gaode Maps
+            lng, lat = self._transform_coordinates(row['longitude'], row['latitude'])
             
-            # Calculate color based on severity percentage using gradient
-            percentage = row['percentage_score']
-            color = self._get_gradient_color(percentage)
+            # Calculate color based on severity percentage
+            color = self._get_gradient_color(row['percentage_score'])
             
-            # Create feature
+            # Convert timestamp to string
+            timestamp_str = row['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
+            
+            # Create point feature
             feature = {
                 'type': 'Feature',
                 'geometry': {
                     'type': 'Point',
-                    'coordinates': [gcj_lng, gcj_lat]
+                    'coordinates': [lng, lat]
                 },
                 'properties': {
-                    'time': row['time_str'],
-                    'severity_score': f"{percentage:.1f}%",
-                    'velocity': f"{row['velocity_magnitude']:.1f} m/s",
-                    'color': color,
-                    'radius': 5,  # Marker radius in pixels
-                    'original_lng': row['longitude'],
-                    'original_lat': row['latitude']
+                    'severity_score': row['severity_score'],
+                    'percentage_score': row['percentage_score'],
+                    'timestamp': timestamp_str,
+                    'color': color
                 }
             }
             features.append(feature)
@@ -952,111 +948,115 @@ class LeafletMapVisualizer:
             'features': features
         }
         
-        # Create HTML file with Gaode Maps
-        self.logger.info("Generating HTML file with Gaode Maps...")
-        html_content = self._generate_gaode_html_content(geojson_data, map_settings)
+        # Save data to file
+        data_file = os.path.join(output_dir, "vibration_severity_map_gaode_data.json")
+        with open(data_file, 'w', encoding='utf-8') as f:
+            json.dump(geojson_data, f, ensure_ascii=False, indent=2)
         
-        # Save HTML file
-        output_file = os.path.join(output_dir, 'vibration_severity_map_gaode.html')
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(html_content)
-        
-        self.logger.info(f"Saved Gaode Maps visualization to: {output_file}")
-        self.logger.info("Gaode Maps visualization completed successfully")
-    
-    def create_gaode_line_map(self, data: pd.DataFrame, output_dir: str = None) -> None:
+        self.logger.info(f"Saved Gaode Maps data to: {data_file}")
+        return data_file, map_settings
+
+    def _generate_gaode_line_map_data(self, data: pd.DataFrame, output_dir: str) -> Tuple[str, str, dict]:
         """
-        Create an interactive Gaode Maps visualization with lines between sequential points
+        Generate GeoJSON data for Gaode Maps line visualization and save to files
         
         Parameters:
-        - data: DataFrame containing combined GPS and severity data
-        - output_dir: Directory to save the output (if None, uses Results directory)
+        - data: DataFrame containing GPS and severity data
+        - output_dir: Directory to save the data files
+        
+        Returns:
+        - Tuple containing:
+          - str: Path to the points data file
+          - str: Path to the lines data file
+          - dict: Map settings (center, zoom, bounds)
         """
-        if output_dir is None:
-            output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Results")
-            if not os.path.exists(output_dir):
-                os.makedirs(output_dir)
+        self.logger.info("Generating Gaode Maps line data")
         
-        self.logger.info("Creating Gaode Maps line visualization")
-        
-        # Calculate map bounds and zoom
-        self.logger.info("Calculating map bounds...")
+        # Calculate map bounds and zoom settings
         map_settings = self.calculate_map_bounds(data)
-        self.logger.info(f"Map settings calculated: zoom={map_settings['zoom']}, center={map_settings['center']}")
         
-        # Convert data to GeoJSON format with lines
-        self.logger.info("Converting data to GeoJSON format with lines...")
+        # Convert data to GeoJSON format
         point_features = []
         line_features = []
         
-        # Sort data by epoch_seconds to ensure correct line order
-        data = data.sort_values('epoch_seconds')
-        
-        # Create point features
-        for _, row in data.iterrows():
-            # Transform coordinates from WGS-84 to GCJ-02
-            gcj_lng, gcj_lat = self._transform_coordinates(row['longitude'], row['latitude'])
+        for i in range(len(data) - 1):
+            current_row = data.iloc[i]
+            next_row = data.iloc[i + 1]
             
-            # Calculate color based on severity percentage using gradient
-            percentage = row['percentage_score']
-            color = self._get_gradient_color(percentage)
+            # Transform coordinates for Gaode Maps
+            current_lng, current_lat = self._transform_coordinates(
+                current_row['longitude'], 
+                current_row['latitude']
+            )
+            next_lng, next_lat = self._transform_coordinates(
+                next_row['longitude'], 
+                next_row['latitude']
+            )
+            
+            # Calculate color based on severity percentage
+            color = self._get_gradient_color(current_row['percentage_score'])
+            
+            # Convert timestamp to string
+            timestamp_str = current_row['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
             
             # Create point feature
             point_feature = {
                 'type': 'Feature',
                 'geometry': {
                     'type': 'Point',
-                    'coordinates': [gcj_lng, gcj_lat]
+                    'coordinates': [current_lng, current_lat]
                 },
                 'properties': {
-                    'time': row['time_str'],
-                    'severity_score': f"{percentage:.1f}%",
-                    'velocity': f"{row['velocity_magnitude']:.1f} m/s",
-                    'color': color,
-                    'radius': 3,  # Smaller radius for points
-                    'original_lng': row['longitude'],
-                    'original_lat': row['latitude']
+                    'severity_score': current_row['severity_score'],
+                    'percentage_score': current_row['percentage_score'],
+                    'timestamp': timestamp_str,
+                    'color': color
                 }
             }
             point_features.append(point_feature)
-        
-        # Create line features between sequential points
-        for i in range(len(data) - 1):
-            current_row = data.iloc[i]
-            next_row = data.iloc[i + 1]
             
-            # Calculate time difference in seconds
+            # Create line feature if time gap is less than 60 seconds
             time_diff = next_row['epoch_seconds'] - current_row['epoch_seconds']
-            
-            # Only draw line if time difference is less than 60 seconds
             if time_diff < 60:
-                # Transform coordinates from WGS-84 to GCJ-02
-                current_gcj_lng, current_gcj_lat = self._transform_coordinates(current_row['longitude'], current_row['latitude'])
-                next_gcj_lng, next_gcj_lat = self._transform_coordinates(next_row['longitude'], next_row['latitude'])
-                
-                # Use the starting point's percentage for the line color
-                starting_percentage = current_row['percentage_score']
-                color = self._get_gradient_color(starting_percentage)
-                
-                # Create line feature
                 line_feature = {
                     'type': 'Feature',
                     'geometry': {
                         'type': 'LineString',
                         'coordinates': [
-                            [current_gcj_lng, current_gcj_lat],
-                            [next_gcj_lng, next_gcj_lat]
+                            [current_lng, current_lat],
+                            [next_lng, next_lat]
                         ]
                     },
                     'properties': {
-                        'start_time': current_row['time_str'],
-                        'end_time': next_row['time_str'],
-                        'severity_score': f"{starting_percentage:.1f}%",
-                        'color': color,
-                        'weight': 7  # Line weight in pixels
+                        'severity_score': (current_row['severity_score'] + next_row['severity_score']) / 2,
+                        'percentage_score': (current_row['percentage_score'] + next_row['percentage_score']) / 2,
+                        'color': color
                     }
                 }
                 line_features.append(line_feature)
+        
+        # Add last point
+        last_row = data.iloc[-1]
+        last_lng, last_lat = self._transform_coordinates(
+            last_row['longitude'], 
+            last_row['latitude']
+        )
+        last_color = self._get_gradient_color(last_row['percentage_score'])
+        last_timestamp_str = last_row['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
+        last_point_feature = {
+            'type': 'Feature',
+            'geometry': {
+                'type': 'Point',
+                'coordinates': [last_lng, last_lat]
+            },
+            'properties': {
+                'severity_score': last_row['severity_score'],
+                'percentage_score': last_row['percentage_score'],
+                'timestamp': last_timestamp_str,
+                'color': last_color
+            }
+        }
+        point_features.append(last_point_feature)
         
         # Create GeoJSON collections
         points_geojson = {
@@ -1069,31 +1069,222 @@ class LeafletMapVisualizer:
             'features': line_features
         }
         
-        # Create HTML file with Gaode Maps
-        self.logger.info("Generating HTML file with Gaode Maps line visualization...")
-        html_content = self._generate_gaode_line_html_content(points_geojson, lines_geojson, map_settings)
+        # Save data to files
+        points_data_file = os.path.join(output_dir, "vibration_severity_line_map_gaode_points.json")
+        lines_data_file = os.path.join(output_dir, "vibration_severity_line_map_gaode_lines.json")
+        
+        with open(points_data_file, 'w', encoding='utf-8') as f:
+            json.dump(points_geojson, f, ensure_ascii=False, indent=2)
+        
+        with open(lines_data_file, 'w', encoding='utf-8') as f:
+            json.dump(lines_geojson, f, ensure_ascii=False, indent=2)
+        
+        self.logger.info(f"Saved Gaode Maps line data to: {points_data_file} and {lines_data_file}")
+        return points_data_file, lines_data_file, map_settings
+
+    def _create_gaode_map_html(self, data_file: str, map_settings: dict, output_file: str) -> None:
+        """
+        Create HTML file for Gaode Maps visualization
+        
+        Parameters:
+        - data_file: Path to the GeoJSON data file
+        - map_settings: Map settings (center, zoom, bounds)
+        - output_file: Path to save the HTML file
+        """
+        self.logger.info(f"Creating Gaode Maps HTML file: {output_file}")
+        
+        # Transform center coordinates for Gaode Maps
+        center_lng, center_lat = self._transform_coordinates(
+            map_settings['center']['lon'], 
+            map_settings['center']['lat']
+        )
+        
+        # Transform bounds coordinates for Gaode Maps
+        south_west_lng, south_west_lat = self._transform_coordinates(
+            map_settings['bounds']['west'], 
+            map_settings['bounds']['south']
+        )
+        north_east_lng, north_east_lat = self._transform_coordinates(
+            map_settings['bounds']['east'], 
+            map_settings['bounds']['north']
+        )
+        
+        # Generate HTML content
+        html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Vibration Severity Map - Gaode</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <style>
+        #map {{ height: 100vh; }}
+        .legend {{ 
+            padding: 6px 8px;
+            font: 14px Arial, Helvetica, sans-serif;
+            background: white;
+            background: rgba(255, 255, 255, 0.8);
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.2);
+            border-radius: 5px;
+            line-height: 24px;
+            color: #555;
+        }}
+        .legend i {{ 
+            width: 18px;
+            height: 18px;
+            float: left;
+            margin-right: 8px;
+            opacity: 0.7;
+        }}
+        .leaflet-control-button {{
+            background-color: white;
+            border: 2px solid rgba(0,0,0,0.2);
+            border-radius: 4px;
+            padding: 5px 10px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 5px;
+        }}
+        .leaflet-control-button:hover {{
+            background-color: #f4f4f4;
+        }}
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <script>
+        // Initialize map
+        var map = L.map('map').setView([{center_lat}, {center_lng}], {map_settings['zoom']});
+        
+        // Add Gaode Maps tile layer
+        L.tileLayer('https://webrd0{{s}}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={{x}}&y={{y}}&z={{z}}', {{
+            subdomains: ['1', '2', '3', '4'],
+            attribution: '&copy; <a href="https://amap.com">高德地图</a>'
+        }}).addTo(map);
+        
+        // Set map bounds
+        var southWest = L.latLng({south_west_lat}, {south_west_lng});
+        var northEast = L.latLng({north_east_lat}, {north_east_lng});
+        var bounds = L.latLngBounds(southWest, northEast);
+        map.fitBounds(bounds);
+        
+        // Load GeoJSON data
+        fetch('{os.path.basename(data_file)}')
+            .then(response => response.json())
+            .then(geojsonData => {{
+                // Create points layer
+                var pointsLayer = L.geoJSON(geojsonData, {{
+                    pointToLayer: function(feature, latlng) {{
+                        return L.circleMarker(latlng, {{
+                            radius: 6,
+                            fillColor: feature.properties.color,
+                            color: '#000',
+                            weight: 1,
+                            opacity: 0.1,
+                            fillOpacity: 0.8
+                        }});
+                    }},
+                    onEachFeature: function(feature, layer) {{
+                        if (feature.properties) {{
+                            var popupContent = '<b>Severity Score:</b> ' + feature.properties.severity_score.toFixed(2) + '<br>' +
+                                             '<b>Percentage:</b> ' + feature.properties.percentage_score.toFixed(1) + '%<br>' +
+                                             '<b>Time:</b> ' + feature.properties.timestamp;
+                            layer.bindPopup(popupContent);
+                        }}
+                    }}
+                }});
+                
+                // Create lines layer
+                var linesLayer = L.geoJSON(geojsonData, {{
+                    style: function(feature) {{
+                        return {{
+                            color: feature.properties.color,
+                            weight: 4,
+                            opacity: 1
+                        }};
+                    }},
+                    onEachFeature: function(feature, layer) {{
+                        if (feature.properties) {{
+                            var popupContent = '<b>Severity Score:</b> ' + feature.properties.severity_score.toFixed(2) + '<br>' +
+                                             '<b>Percentage:</b> ' + feature.properties.percentage_score.toFixed(1) + '%<br>' +
+                                             '<b>Time:</b> ' + feature.properties.timestamp;
+                            layer.bindPopup(popupContent);
+                        }}
+                    }}
+                }});
+                
+                // Add layers to map
+                linesLayer.addTo(map);
+                pointsLayer.addTo(map);
+                
+                // Add toggle button
+                var toggleButton = L.Control.extend({{
+                    options: {{
+                        position: 'topleft'
+                    }},
+                    onAdd: function(map) {{
+                        var container = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+                        var button = L.DomUtil.create('a', 'leaflet-control-button', container);
+                        button.innerHTML = 'Toggle Points';
+                        button.href = '#';
+                        button.title = 'Toggle Points';
+                        
+                        L.DomEvent.on(button, 'click', function(e) {{
+                            L.DomEvent.stopPropagation(e);
+                            L.DomEvent.preventDefault(e);
+                            if (map.hasLayer(pointsLayer)) {{
+                                map.removeLayer(pointsLayer);
+                            }} else {{
+                                map.addLayer(pointsLayer);
+                            }}
+                        }});
+                        
+                        return container;
+                    }}
+                }});
+                map.addControl(new toggleButton());
+            }})
+            .catch(error => console.error('Error loading data:', error));
+        
+        // Add legend
+        var legend = L.control({{position: 'bottomright'}});
+        legend.onAdd = function(map) {{
+            var div = L.DomUtil.create('div', 'legend');
+            var grades = [0, 50, 100];
+            var colors = ['#00ff00', '#ffff00', '#ff0000'];
+            
+            div.innerHTML = '<b>Severity Percentage</b><br>';
+            for (var i = 0; i < grades.length; i++) {{
+                div.innerHTML +=
+                    '<i style="background:' + colors[i] + '"></i> ' +
+                    grades[i] + (grades[i + 1] ? '&ndash;' + grades[i + 1] + '%<br>' : '%+');
+            }}
+            return div;
+        }};
+        legend.addTo(map);
+    </script>
+</body>
+</html>"""
         
         # Save HTML file
-        output_file = os.path.join(output_dir, 'vibration_severity_line_map_gaode.html')
         with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(html_content)
+            f.write(html)
         
-        self.logger.info(f"Saved Gaode Maps line visualization to: {output_file}")
-        self.logger.info("Gaode Maps line visualization completed successfully")
-    
-    def _generate_gaode_html_content(self, geojson_data: dict, map_settings: dict) -> str:
+        self.logger.info(f"Gaode Maps HTML file created successfully: {output_file}")
+
+    def _create_gaode_line_map_html(self, points_data_file: str, lines_data_file: str, 
+                                  map_settings: dict, output_file: str) -> None:
         """
-        Generate HTML content with Gaode Maps
+        Create HTML file for Gaode Maps line visualization
         
         Parameters:
-        - geojson_data: GeoJSON data for visualization
+        - points_data_file: Path to the points GeoJSON data file
+        - lines_data_file: Path to the lines GeoJSON data file
         - map_settings: Map settings (center, zoom, bounds)
-        
-        Returns:
-        - HTML content as string
+        - output_file: Path to save the HTML file
         """
-        # Convert GeoJSON data to JSON string
-        geojson_str = json.dumps(geojson_data)
+        self.logger.info(f"Creating Gaode Maps line HTML file: {output_file}")
         
         # Transform center coordinates for Gaode Maps
         center_lng, center_lat = self._transform_coordinates(
@@ -1113,421 +1304,145 @@ class LeafletMapVisualizer:
         
         # Generate HTML content
         html = f"""<!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
+    <title>Vibration Severity Line Map - Gaode</title>
+    <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vibration Severity Map (Gaode)</title>
-    
-    <!-- Leaflet CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-          crossorigin=""/>
-    
-    <!-- Leaflet MarkerCluster CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
-    
-    <!-- Leaflet JavaScript -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-            crossorigin=""></script>
-    
-    <!-- Leaflet MarkerCluster JavaScript -->
-    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
-    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <style>
-        body {{
-            margin: 0;
-            padding: 0;
-            font-family: Arial, sans-serif;
-        }}
-        #map {{
-            width: 100%;
-            height: 100vh;
-        }}
-        .info {{
+        #map {{ height: 100vh; }}
+        .legend {{ 
             padding: 6px 8px;
-            font: 14px/16px Arial, Helvetica, sans-serif;
+            font: 14px Arial, Helvetica, sans-serif;
             background: white;
             background: rgba(255, 255, 255, 0.8);
             box-shadow: 0 0 15px rgba(0, 0, 0, 0.2);
             border-radius: 5px;
-        }}
-        .legend {{
-            line-height: 18px;
+            line-height: 24px;
             color: #555;
         }}
-        .legend i {{
+        .legend i {{ 
             width: 18px;
             height: 18px;
             float: left;
             margin-right: 8px;
             opacity: 0.7;
         }}
-        .controls {{
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            z-index: 1000;
-            background: white;
-            padding: 5px;
-            border-radius: 5px;
-            box-shadow: 0 0 15px rgba(0, 0, 0, 0.2);
-        }}
-        .controls button {{
-            margin: 2px;
-            padding: 5px 10px;
-            border: none;
-            background: #4CAF50;
-            color: white;
-            cursor: pointer;
-            border-radius: 3px;
-        }}
-        .controls button:hover {{
-            background: #45a049;
-        }}
     </style>
 </head>
 <body>
     <div id="map"></div>
-    <div class="controls">
-        <button onclick="resetMap()">Reset View</button>
-        <button onclick="toggleClusters()">Toggle Clusters</button>
-    </div>
-    
     <script>
-        // Map data
-        const mapData = {geojson_str};
-        const mapSettings = {{
-            center: [{center_lat}, {center_lng}],
-            zoom: {map_settings['zoom']},
-            bounds: [
-                [{south_west_lat}, {south_west_lng}],
-                [{north_east_lat}, {north_east_lng}]
-            ]
-        }};
-        
         // Initialize map
-        const map = L.map('map').setView(mapSettings.center, mapSettings.zoom);
+        var map = L.map('map').setView([{center_lat}, {center_lng}], {map_settings['zoom']});
         
         // Add Gaode Maps tile layer
         L.tileLayer('https://webrd0{{s}}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={{x}}&y={{y}}&z={{z}}', {{
-            attribution: '&copy; <a href="https://amap.com">高德地图</a>',
             subdomains: ['1', '2', '3', '4'],
+            attribution: '&copy; <a href="https://amap.com">高德地图</a>'
         }}).addTo(map);
         
-        // Create marker cluster group
-        const markers = L.markerClusterGroup();
+        // Set map bounds
+        var southWest = L.latLng({south_west_lat}, {south_west_lng});
+        var northEast = L.latLng({north_east_lat}, {north_east_lng});
+        var bounds = L.latLngBounds(southWest, northEast);
+        map.fitBounds(bounds);
         
-        // Add GeoJSON data to map
-        const geojsonLayer = L.geoJSON(mapData, {{
-            pointToLayer: function(feature, latlng) {{
-                const props = feature.properties;
-                return L.circleMarker(latlng, {{
-                    radius: props.radius,
-                    fillColor: props.color,
-                    color: 'transparent', // Remove the black circle
-                    weight: 0, // Set weight to 0 to remove the border
-                    opacity: 0, // Set opacity to 0 to make the border invisible
-                    fillOpacity: 1
-                }});
-            }},
-            onEachFeature: function(feature, layer) {{
-                const props = feature.properties;
-                layer.bindPopup(`
-                    <b>Time:</b> ${{props.time}}<br>
-                    <b>Severity Score:</b> ${{props.severity_score}}<br>
-                    <b>Velocity:</b> ${{props.velocity}}<br>
-                    <b>Original GPS:</b> ${{props.original_lat}}, ${{props.original_lng}}
-                `);
-            }}
-        }});
-        
-        // Add GeoJSON layer to marker cluster
-        markers.addLayer(geojsonLayer);
-        
-        // Add marker cluster to map
-        map.addLayer(markers);
-        
-        // Fit map to bounds
-        map.fitBounds(mapSettings.bounds);
+        // Load GeoJSON data
+        fetch('{os.path.basename(lines_data_file)}')
+            .then(response => response.json())
+            .then(linesData => {{
+                // Create lines layer
+                var linesLayer = L.geoJSON(linesData, {{
+                    style: function(feature) {{
+                        return {{
+                            color: feature.properties.color,
+                            weight: 7,
+                            opacity: 1
+                        }};
+                    }},
+                    onEachFeature: function(feature, layer) {{
+                        if (feature.properties) {{
+                            var popupContent = '<b>Average Severity Score:</b> ' + feature.properties.severity_score.toFixed(2) + '<br>' +
+                                             '<b>Average Percentage:</b> ' + feature.properties.percentage_score.toFixed(1) + '%';
+                            layer.bindPopup(popupContent);
+                        }}
+                    }}
+                }}).addTo(map);
+            }})
+            .catch(error => console.error('Error loading data:', error));
         
         // Add legend
-        const legend = L.control({{position: 'bottomright'}});
+        var legend = L.control({{position: 'bottomright'}});
         legend.onAdd = function(map) {{
-            const div = L.DomUtil.create('div', 'info legend');
-            div.innerHTML = `
-                <h4>Severity Score</h4>
-                <i style="background: #2e8b57"></i> 0%<br>
-                <i style="background: #daa520"></i> 50%<br>
-                <i style="background: #8b0000"></i> 100%
-            `;
+            var div = L.DomUtil.create('div', 'legend');
+            var grades = [0, 50, 100];
+            var colors = ['#00ff00', '#ffff00', '#ff0000'];
+            
+            div.innerHTML = '<b>Severity Percentage</b><br>';
+            for (var i = 0; i < grades.length; i++) {{
+                div.innerHTML +=
+                    '<i style="background:' + colors[i] + '"></i> ' +
+                    grades[i] + (grades[i + 1] ? '&ndash;' + grades[i + 1] + '%<br>' : '%+');
+            }}
             return div;
         }};
         legend.addTo(map);
-        
-        // Add scale control
-        L.control.scale().addTo(map);
-        
-        // Function to reset map view
-        function resetMap() {{
-            map.fitBounds(mapSettings.bounds);
-        }}
-        
-        // Function to toggle clusters
-        let clustersEnabled = true;
-        function toggleClusters() {{
-            if (clustersEnabled) {{
-                map.removeLayer(markers);
-                geojsonLayer.addTo(map);
-                clustersEnabled = false;
-            }} else {{
-                map.removeLayer(geojsonLayer);
-                map.addLayer(markers);
-                clustersEnabled = true;
-            }}
-        }}
     </script>
 </body>
-</html>
-"""
-        return html
-    
-    def _generate_gaode_line_html_content(self, points_geojson: dict, lines_geojson: dict, map_settings: dict) -> str:
+</html>"""
+        
+        # Save HTML file
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(html)
+        
+        self.logger.info(f"Gaode Maps line HTML file created successfully: {output_file}")
+
+    def create_gaode_map(self, data: pd.DataFrame, output_dir: Optional[str] = None) -> None:
         """
-        Generate HTML content with Gaode Maps showing lines between points
+        Create an interactive map visualization using Gaode Maps
         
         Parameters:
-        - points_geojson: GeoJSON data for points
-        - lines_geojson: GeoJSON data for lines
-        - map_settings: Map settings (center, zoom, bounds)
-        
-        Returns:
-        - HTML content as string
+        - data: DataFrame containing GPS and severity data
+        - output_dir: Directory to save the output (if None, uses default Results directory)
         """
-        # Convert GeoJSON data to JSON string
-        points_geojson_str = json.dumps(points_geojson)
-        lines_geojson_str = json.dumps(lines_geojson)
+        if output_dir is None:
+            output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Results")
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
         
-        # Transform center coordinates for Gaode Maps
-        center_lng, center_lat = self._transform_coordinates(
-            map_settings['center']['lon'], 
-            map_settings['center']['lat']
-        )
+        # Generate map data and save to file
+        data_file, map_settings = self._generate_gaode_map_data(data, output_dir)
         
-        # Transform bounds coordinates for Gaode Maps
-        south_west_lng, south_west_lat = self._transform_coordinates(
-            map_settings['bounds']['west'], 
-            map_settings['bounds']['south']
-        )
-        north_east_lng, north_east_lat = self._transform_coordinates(
-            map_settings['bounds']['east'], 
-            map_settings['bounds']['north']
-        )
+        # Create HTML file
+        output_file = os.path.join(output_dir, "vibration_severity_map_gaode.html")
+        self._create_gaode_map_html(data_file, map_settings, output_file)
         
-        # Generate HTML content
-        html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vibration Severity Line Map (Gaode)</title>
-    
-    <!-- Leaflet CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-          crossorigin=""/>
-    
-    <!-- Leaflet MarkerCluster CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
-    
-    <!-- Leaflet JavaScript -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-            crossorigin=""></script>
-    
-    <!-- Leaflet MarkerCluster JavaScript -->
-    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
-    
-    <style>
-        body {{
-            margin: 0;
-            padding: 0;
-            font-family: Arial, sans-serif;
-        }}
-        #map {{
-            width: 100%;
-            height: 100vh;
-        }}
-        .info {{
-            padding: 6px 8px;
-            font: 14px/16px Arial, Helvetica, sans-serif;
-            background: white;
-            background: rgba(255, 255, 255, 0.8);
-            box-shadow: 0 0 15px rgba(0, 0, 0, 0.2);
-            border-radius: 5px;
-        }}
-        .legend {{
-            line-height: 18px;
-            color: #555;
-        }}
-        .legend i {{
-            width: 18px;
-            height: 18px;
-            float: left;
-            margin-right: 8px;
-            opacity: 0.7;
-        }}
-        .controls {{
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            z-index: 1000;
-            background: white;
-            padding: 5px;
-            border-radius: 5px;
-            box-shadow: 0 0 15px rgba(0, 0, 0, 0.2);
-        }}
-        .controls button {{
-            margin: 2px;
-            padding: 5px 10px;
-            border: none;
-            background: #4CAF50;
-            color: white;
-            cursor: pointer;
-            border-radius: 3px;
-        }}
-        .controls button:hover {{
-            background: #45a049;
-        }}
-    </style>
-</head>
-<body>
-    <div id="map"></div>
-    <div class="controls">
-        <button onclick="resetMap()">Reset View</button>
-        <button onclick="togglePoints()">Toggle Points</button>
-    </div>
-    
-    <script>
-        // Map data
-        const pointsData = {points_geojson_str};
-        const linesData = {lines_geojson_str};
-        const mapSettings = {{
-            center: [{center_lat}, {center_lng}],
-            zoom: {map_settings['zoom']},
-            bounds: [
-                [{south_west_lat}, {south_west_lng}],
-                [{north_east_lat}, {north_east_lng}]
-            ]
-        }};
+        self.logger.info(f"Gaode Maps visualization created successfully: {output_file}")
+
+    def create_gaode_line_map(self, data: pd.DataFrame, output_dir: Optional[str] = None) -> None:
+        """
+        Create an interactive line map visualization using Gaode Maps
         
-        // Initialize map
-        const map = L.map('map').setView(mapSettings.center, mapSettings.zoom);
+        Parameters:
+        - data: DataFrame containing GPS and severity data
+        - output_dir: Directory to save the output (if None, uses default Results directory)
+        """
+        if output_dir is None:
+            output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Results")
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
         
-        // Add Gaode Maps tile layer
-        L.tileLayer('https://webrd0{{s}}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={{x}}&y={{y}}&z={{z}}', {{
-            attribution: '&copy; <a href="https://amap.com">高德地图</a>',
-            subdomains: ['1', '2', '3', '4'],
-        }}).addTo(map);
+        # Generate map data and save to files
+        points_data_file, lines_data_file, map_settings = self._generate_gaode_line_map_data(data, output_dir)
         
-        // Create marker cluster group for points
-        const markers = L.markerClusterGroup();
+        # Create HTML file
+        output_file = os.path.join(output_dir, "vibration_severity_line_map_gaode.html")
+        self._create_gaode_line_map_html(points_data_file, lines_data_file, map_settings, output_file)
         
-        // Add points GeoJSON data to map
-        const pointsLayer = L.geoJSON(pointsData, {{
-            pointToLayer: function(feature, latlng) {{
-                const props = feature.properties;
-                return L.circleMarker(latlng, {{
-                    radius: props.radius,
-                    fillColor: props.color,
-                    color: 'transparent',
-                    weight: 0,
-                    opacity: 0,
-                    fillOpacity: 1
-                }});
-            }},
-            onEachFeature: function(feature, layer) {{
-                const props = feature.properties;
-                layer.bindPopup(`
-                    <b>Time:</b> ${{props.time}}<br>
-                    <b>Severity Score:</b> ${{props.severity_score}}<br>
-                    <b>Velocity:</b> ${{props.velocity}}<br>
-                    <b>Original GPS:</b> ${{props.original_lat}}, ${{props.original_lng}}
-                `);
-            }}
-        }});
-        
-        // Add lines GeoJSON data to map
-        const linesLayer = L.geoJSON(linesData, {{
-            style: function(feature) {{
-                const props = feature.properties;
-                return {{
-                    color: props.color,
-                    weight: props.weight,
-                    opacity: 1
-                }};
-            }},
-            onEachFeature: function(feature, layer) {{
-                const props = feature.properties;
-                layer.bindPopup(`
-                    <b>Start Time:</b> ${{props.start_time}}<br>
-                    <b>End Time:</b> ${{props.end_time}}<br>
-                    <b>Severity Score:</b> ${{props.severity_score}}
-                `);
-            }}
-        }});
-        
-        // Add GeoJSON layers to marker cluster
-        markers.addLayer(pointsLayer);
-        
-        // Add layers to map
-        map.addLayer(linesLayer);
-        map.addLayer(markers);
-        
-        // Fit map to bounds
-        map.fitBounds(mapSettings.bounds);
-        
-        // Add legend
-        const legend = L.control({{position: 'bottomright'}});
-        legend.onAdd = function(map) {{
-            const div = L.DomUtil.create('div', 'info legend');
-            div.innerHTML = `
-                <h4>Severity Score</h4>
-                <i style="background: #2e8b57"></i> 0%<br>
-                <i style="background: #daa520"></i> 50%<br>
-                <i style="background: #8b0000"></i> 100%
-            `;
-            return div;
-        }};
-        legend.addTo(map);
-        
-        // Add scale control
-        L.control.scale().addTo(map);
-        
-        // Function to reset map view
-        function resetMap() {{
-            map.fitBounds(mapSettings.bounds);
-        }}
-        
-        // Function to toggle points
-        let pointsVisible = true;
-        function togglePoints() {{
-            if (pointsVisible) {{
-                map.removeLayer(markers);
-                pointsVisible = false;
-            }} else {{
-                map.addLayer(markers);
-                pointsVisible = true;
-            }}
-        }}
-    </script>
-</body>
-</html>
-"""
-        return html
+        self.logger.info(f"Gaode Maps line visualization created successfully: {output_file}")
 
 def main():
     # Create visualizer instance with debug mode enabled
