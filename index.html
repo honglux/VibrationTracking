@@ -25,10 +25,68 @@
             margin-right: 8px;
             opacity: 0.7;
         }
+        .gps-button {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            background: white;
+            border: 2px solid rgba(0,0,0,0.2);
+            border-radius: 4px;
+            padding: 5px 10px;
+            cursor: pointer;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .gps-button:hover {
+            background-color: #f4f4f4;
+        }
+        .gps-button.active {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .gps-button.error {
+            background-color: #f44336;
+            color: white;
+        }
+        .location-marker {
+            background-color: #2196F3;
+            border: 2px solid white;
+            border-radius: 50%;
+            width: 12px;
+            height: 12px;
+            box-shadow: 0 0 5px rgba(0,0,0,0.3);
+        }
+        .location-marker::after {
+            content: '';
+            position: absolute;
+            top: -4px;
+            left: -4px;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background-color: #2196F3;
+            opacity: 0.3;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 0.3; }
+            50% { transform: scale(1.5); opacity: 0.1; }
+            100% { transform: scale(1); opacity: 0.3; }
+        }
     </style>
 </head>
 <body>
     <div id="map"></div>
+    <button id="gpsButton" class="gps-button" title="Track my location">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
+            <circle cx="12" cy="9" r="2.5"/>
+        </svg>
+        Track Location
+    </button>
     <script>
         // Initialize map
         var map = L.map('map').setView([30.27915093232205, 120.15900183510325], 7);
@@ -44,6 +102,82 @@
         var northEast = L.latLng(30.3528918243974, 120.1998071080948);
         var bounds = L.latLngBounds(southWest, northEast);
         map.fitBounds(bounds);
+        
+        // GPS tracking variables
+        var locationMarker = null;
+        var watchId = null;
+        var gpsButton = document.getElementById('gpsButton');
+        
+        // Function to update location marker
+        function updateLocationMarker(latlng) {
+            if (locationMarker) {
+                locationMarker.setLatLng(latlng);
+            } else {
+                locationMarker = L.marker(latlng, {
+                    icon: L.divIcon({
+                        className: 'location-marker',
+                        iconSize: [12, 12]
+                    })
+                }).addTo(map);
+            }
+        }
+        
+        // Function to handle GPS success
+        function onLocationSuccess(position) {
+            var latlng = L.latLng(
+                position.coords.latitude,
+                position.coords.longitude
+            );
+            updateLocationMarker(latlng);
+            map.setView(latlng, 16);
+            gpsButton.classList.add('active');
+            gpsButton.classList.remove('error');
+        }
+        
+        // Function to handle GPS error
+        function onLocationError(error) {
+            console.error('Error getting location:', error);
+            gpsButton.classList.remove('active');
+            gpsButton.classList.add('error');
+            gpsButton.title = 'Location access denied';
+            
+            // Show error message
+            alert('Unable to access your location. Please check your device settings and try again.');
+        }
+        
+        // Function to toggle GPS tracking
+        function toggleGPS() {
+            if (watchId) {
+                // Stop tracking
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+                if (locationMarker) {
+                    map.removeLayer(locationMarker);
+                    locationMarker = null;
+                }
+                gpsButton.classList.remove('active');
+                gpsButton.classList.remove('error');
+                gpsButton.title = 'Track my location';
+            } else {
+                // Start tracking
+                if (navigator.geolocation) {
+                    watchId = navigator.geolocation.watchPosition(
+                        onLocationSuccess,
+                        onLocationError,
+                        {
+                            enableHighAccuracy: true,
+                            timeout: 5000,
+                            maximumAge: 0
+                        }
+                    );
+                } else {
+                    alert('Geolocation is not supported by your browser');
+                }
+            }
+        }
+        
+        // Add click event to GPS button
+        gpsButton.addEventListener('click', toggleGPS);
         
         // Load GeoJSON data
         fetch('vibration_severity_line_map_gaode_lines.json')
