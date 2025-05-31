@@ -4,12 +4,17 @@ BVvenv/
 env/
 .env/
 
+# Data Directories
+TracksData/
+VibData/
+Results/
+Database/
+
 # Logs
 Logs/
 *.log
 
-# Database
-Database/
+# Database files
 *.db
 *.sqlite
 *.sqlite3
@@ -40,10 +45,4 @@ wheels/
 .idea/
 .vscode/
 *.swp
-*.swo 
-
-Results/
-
-TracksData/
-
-VibData/
+*.swo
