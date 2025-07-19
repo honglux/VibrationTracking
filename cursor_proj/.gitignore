@@ -8,9 +8,12 @@ env/
 TracksData/
 VibData/
 Results/
+Results\
 Results/*.json
 Results/*.html
 Database/
+cursor_proj/Results/
+cursor_proj\Results\
 
 # Logs
 Logs/
