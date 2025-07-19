@@ -8,6 +8,8 @@ env/
 TracksData/
 VibData/
 Results/
+Results/*.json
+Results/*.html
 Database/
 
 # Logs
